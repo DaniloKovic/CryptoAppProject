@@ -100,43 +100,50 @@ namespace CryptoAppProject.Helper
             return caCertificate;
         }
 
-        public static void CreateDigitalCertificateAndKeysForUser(UserRegistrationRequest newUser, string publicKeyPath, string privateKeyPath, string digitalCertificatePath)
+        public static void CreateDigitalCertificateAndKeysForUser(UserRegistrationRequest newUser, 
+                                                                  string publicKeyPath, 
+                                                                  string privateKeyPath, 
+                                                                  string digitalCertificatePath)
         {
-            if (string.IsNullOrEmpty(publicKeyPath) || string.IsNullOrEmpty(privateKeyPath) || string.IsNullOrEmpty(digitalCertificatePath))
+            if (newUser == null || string.IsNullOrEmpty(newUser.Username) ||
+                string.IsNullOrEmpty(publicKeyPath) || 
+                string.IsNullOrEmpty(privateKeyPath) || 
+                string.IsNullOrEmpty(digitalCertificatePath))
             {
                 return;
             }
+            // Putanje do fajlova privatnog ključa CA tijela i korisničkog sertifikata
             string caPrivateKeyPath = Path.Combine("CA", "CA_PrivateKey.key");
+            string userCertificatePath = $"DigitalCertificates/{newUser.Username}.cer";
 
-            using (RSA rsaUser = RSA.Create())
+            // Učitaj privatni ključ CA tijela
+            using (RSA rsaCA = RSA.Create())
             {
-                // Učitaj privatni ključ CA tijela
-                using (RSA rsaCA = RSA.Create())
-                {
-                    rsaCA.ImportRSAPrivateKey(File.ReadAllBytes(caPrivateKeyPath), out _);
+                rsaCA.ImportRSAPrivateKey(File.ReadAllBytes(caPrivateKeyPath), out _);
 
+                // Generiši RSA ključeve za korisnika
+                using (RSA rsaUser = RSA.Create())
+                {
                     // Generiši zahtev za sertifikat za korisnika
-                    var request = new System.Security.Cryptography.X509Certificates
-                                        .CertificateRequest(
-                                            $"CN={newUser.Username}", // Common Name korisnika
-                                            rsaUser,
-                                            HashAlgorithmName.SHA256,
-                                            RSASignaturePadding.Pkcs1);
+                    var request = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+                        $"CN={newUser.Username}", // Common Name korisnika
+                        rsaUser,
+                        HashAlgorithmName.SHA256,
+                        RSASignaturePadding.Pkcs1);
 
                     // Postavi period važenja sertifikata
                     DateTimeOffset startDate = DateTimeOffset.UtcNow;
                     DateTimeOffset endDate = startDate.AddYears(1);
 
-                    // Generiši sertifikat
-                    X509Certificate2 userCertificate = request.Create(
-                        issuerName: new X500DistinguishedName("CN=CA_Tijelo"), // Common Name CA tijela
-                        notBefore: startDate,
-                        notAfter: endDate,
-                        signingkey: rsaCA,
-                        PublicKey: rsaUser);
+                    // Kreiraj sertifikat za korisnika
+                    X509Certificate2 userCertificate = request.CreateSelfSigned(
+                        new DateTimeOffset(startDate.Year, startDate.Month, startDate.Day, 0, 0, 0, TimeSpan.Zero),
+                        new DateTimeOffset(endDate.Year, endDate.Month, endDate.Day, 23, 59, 59, TimeSpan.Zero));
 
-                    // Sačuvaj sertifikat u fajl ili koristi ga kako je potrebno
-                    string userCertificatePath = "Korisnik_sertifikat.pfx";
+                    // Potpiši korisnički sertifikat privatnim ključem CA tijela
+                    userCertificate = userCertificate.CopyWithPrivateKey(rsaCA);
+
+                    // Sačuvaj korisnički sertifikat u fajl
                     File.WriteAllBytes(userCertificatePath, userCertificate.Export(X509ContentType.Pfx, "password"));
 
                     Console.WriteLine($"Sertifikat za korisnika je kreiran i sačuvan na putanji: {userCertificatePath}");
@@ -168,6 +175,7 @@ namespace CryptoAppProject.Helper
             {
 
             }
+            return new X509Certificate2();
         }
 
         public static void ReadExistingCertificate(string digitalCertificatePath)
