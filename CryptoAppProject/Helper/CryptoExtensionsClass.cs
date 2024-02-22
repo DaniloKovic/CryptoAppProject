@@ -1,5 +1,4 @@
 ﻿using CryptoAppProject.Model.Requests;
-using Org.BouncyCastle.Tls;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -78,11 +77,10 @@ namespace CryptoAppProject.Helper
         private static X509Certificate2 GenerateCACertificate(RSA rsa)
         {
             // Kreiraj CA sertifikat
-            var request = new System.Security.Cryptography.X509Certificates
-                                .CertificateRequest("CN=CA_Entity", 
-                                                    rsa, 
-                                                    HashAlgorithmName.SHA256, 
-                                                    RSASignaturePadding.Pkcs1);
+            var request = new CertificateRequest("CN=CA_Entity", 
+                                                rsa, 
+                                                HashAlgorithmName.SHA256, 
+                                                RSASignaturePadding.Pkcs1);
 
             // Dodaj dodatne informacije o CA sertifikatu
             // Postavi da je CA sertifikat i da može izdavati druge sertifikate
@@ -114,7 +112,7 @@ namespace CryptoAppProject.Helper
             }
             // Putanje do fajlova privatnog ključa CA tijela i korisničkog sertifikata
             string caPrivateKeyPath = Path.Combine("CA", "CA_PrivateKey.key");
-            string userCertificatePath = $"DigitalCertificates/{newUser.Username}.cer";
+            string userCertificatePath = $"UserInformations/{newUser.Username}/{newUser.Username}.cer";
 
             // Učitaj privatni ključ CA tijela
             using (RSA rsaCA = RSA.Create())
@@ -125,11 +123,11 @@ namespace CryptoAppProject.Helper
                 using (RSA rsaUser = RSA.Create())
                 {
                     // Generiši zahtev za sertifikat za korisnika
-                    var request = new System.Security.Cryptography.X509Certificates.CertificateRequest(
-                        $"CN={newUser.Username}", // Common Name korisnika
-                        rsaUser,
-                        HashAlgorithmName.SHA256,
-                        RSASignaturePadding.Pkcs1);
+                    var request = new CertificateRequest(
+                                            $"CN={newUser.Username}", // Common Name korisnika
+                                            rsaUser,
+                                            HashAlgorithmName.SHA256,
+                                            RSASignaturePadding.Pkcs1);
 
                     // Postavi period važenja sertifikata
                     DateTimeOffset startDate = DateTimeOffset.UtcNow;
@@ -143,10 +141,17 @@ namespace CryptoAppProject.Helper
                     // Potpiši korisnički sertifikat privatnim ključem CA tijela
                     userCertificate = userCertificate.CopyWithPrivateKey(rsaCA);
 
-                    // Sačuvaj korisnički sertifikat u fajl
-                    File.WriteAllBytes(userCertificatePath, userCertificate.Export(X509ContentType.Pfx, "password"));
+                    // Sačuvaj korisnički sertifikat u fajl sa .cer ekstenzijom
+                    if (!File.Exists(userCertificatePath))
+                    {
 
-                    Console.WriteLine($"Sertifikat za korisnika je kreiran i sačuvan na putanji: {userCertificatePath}");
+                        File.WriteAllBytes(userCertificatePath, userCertificate.Export(X509ContentType.Cert));
+                        Console.WriteLine($"Sertifikat za korisnika je kreiran i sačuvan na putanji: {userCertificatePath}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Sertifikat za korisnika već postoji na datoj putanji: {userCertificatePath}");
+                    }
                 }
             }
         }

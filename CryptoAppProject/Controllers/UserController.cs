@@ -72,69 +72,47 @@ namespace CryptoAppProject.Controllers
             }
 
             // Kreiraj digitalni sertifikat i par ključeva za korisnika koji želi da se registruje
-            const string userFolderPath = "DigitalCertificates";
-            const string userPublicKey = "CA_PublicKey";
-            const string userPrivateKey = "CA_PrivateKey";
-            const string userDigitalCertificatePath = "CA_DigitalCertificate";
-            CryptoExtensionsClass.CreateDigitalCertificateAndKeys(userFolderPath, userPublicKey, userPrivateKey, userDigitalCertificatePath, true, userRequest);
-
+            string userFolderPath = $"UserInformations/{userRequest.Username}";
+            string userPublicKey = $"UserInformations/{userRequest.Username}/{userRequest.Username}.key";
+            string userPrivateKey = $"UserInformations/{userRequest.Username}/{userRequest.Username}.key";
+            string userDigitalCertificatePath = $"UserInformations/{userRequest.Username}/{userRequest.Username}.cer";
+   
             // Kreiraj digitalni sertifikat i par ključeva za korisnika koji želi da se registruje
             CryptoExtensionsClass.CreateDigitalCertificateAndKeysForUser(userRequest, userPublicKey, userPrivateKey, userDigitalCertificatePath);
 
             // Insert u bazu
-
-            // Par RSA ključeva koji su povezani sa userom. Public key se stavlja u Dig.Sert., a privatni ključ se vraća nazad korisniku
-            using (RSA rsaKey = RSA.Create())
+            User newUser = new User()
             {
-                User newUser = new User()
+                Username = userRequest.Username,
+                PasswordHash = passwordInfo.Item1,
+                Salt = passwordInfo.Item2,
+                Email = userRequest.Email,
+                DateOfRegistration = DateTime.Now,
+                DigitalCertificatePath = $"UserInformations/{userRequest.Username}/{userRequest.Username}.cer",
+                // PublicKey = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo())
+                // PublicKey = "ana"
+            };
+
+            // rsaKey.privateKey
+            int result = await _userRepository.InsertNewItemAsync(newUser);
+            if(result == 1)
+            {
+                UserRegistrationResponse response = new UserRegistrationResponse()
                 {
-                    Username = userRequest.Username,
-                    PasswordHash = passwordInfo.Item1,
-                    Salt = passwordInfo.Item2,
-                    Email = userRequest.Email,
-                    DateOfRegistration = DateTime.Now,
-                    DigitalCertificatePath = $"DigitalCertificates/{userRequest.Username}.pfx",
-                    PublicKey = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo())
-                    // PublicKey = "ana"
+                    // PublicKeyBytes = rsaKey.ExportSubjectPublicKeyInfo(),
+                    // PublicKeyBase64 = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo()),
+                    // PrivateKeyBytes = rsaKey.ExportRSAPrivateKey(),
+                    // PrivateKeyBase64 = Convert.ToBase64String(rsaKey.ExportRSAPrivateKey()),
+                    // DigitalCertificateFilePath = $"UserInformations/{newUser.Username}.cer",
                 };
-
-                // rsaKey.privateKey
-                int result = await _userRepository.InsertNewItemAsync(newUser);
-                if (result == 1)
-                {
-                    CertificateRequest? request = new CertificateRequest(
-                                                        $"CN={newUser.Username}",
-                                                        rsaKey,
-                                                        HashAlgorithmName.SHA256,
-                                                        RSASignaturePadding.Pkcs1);
-
-                    request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, false));
-                    request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
-
-                    DateTimeOffset startDate = DateTimeOffset.UtcNow;
-                    DateTimeOffset endDate = startDate.AddYears(1);
-
-                    X509Certificate2 certificate = request.CreateSelfSigned(new DateTimeOffset(startDate.Year, startDate.Month, startDate.Day, 0, 0, 0, TimeSpan.Zero),
-                                                                            new DateTimeOffset(endDate.Year, endDate.Month, endDate.Day, 23, 59, 59, TimeSpan.Zero));
-
-                    // Digitalni sertifikat u PFX fajlu (možete izabrati drugi format po potrebi)
-                    // System.IO.File.WriteAllBytes($"DigitalCertificates/{newUser.Username}.pfx", certificate.Export(X509ContentType.Pfx, $"{newUser.PasswordHash}"));
-                    System.IO.File.WriteAllBytes($"DigitalCertificates/{newUser.Username}.pfx", certificate.Export(X509ContentType.Pfx, $"{newUser.PasswordHash}"));
-                    UserRegistrationResponse response = new UserRegistrationResponse()
-                    {
-                        PublicKeyBytes = rsaKey.ExportSubjectPublicKeyInfo(),
-                        PublicKeyBase64 = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo()),
-                        PrivateKeyBytes = rsaKey.ExportRSAPrivateKey(),
-                        PrivateKeyBase64 = Convert.ToBase64String(rsaKey.ExportRSAPrivateKey()),
-                        DigitalCertificateFilePath = $"DigitalCertificates/{newUser.Username}.pfx",
-                    };
-                    return Ok(response);
-                }
-                else
-                {
-                    return BadRequest();
-                }
+                return Ok(response);
             }
+            else
+            {
+                return BadRequest();
+            }
+
+            
         }
 
         /* Username: kova  Password: kova123 */
