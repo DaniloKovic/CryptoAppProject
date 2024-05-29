@@ -2,8 +2,6 @@
 using CryptoAppProject.Model;
 using CryptoAppProject.Repository.RepositoryInterfaces;
 using Microsoft.EntityFrameworkCore;
-using Org.BouncyCastle.Security;
-using System.Linq.Expressions;
 
 namespace CryptoAppProject.Repository.RepositoryClasses
 {
@@ -25,7 +23,7 @@ namespace CryptoAppProject.Repository.RepositoryClasses
             if(user == null) { 
                 return false; 
             }
-            if(user.PasswordHash.Equals(CryptoExtensionsClass.HashPassword(password, user.Salt))) {
+            if(user.PasswordHash.Equals(CryptoCustomExtensions.HashPassword(password, user.Salt))) {
                 return true;
             }
             return false;

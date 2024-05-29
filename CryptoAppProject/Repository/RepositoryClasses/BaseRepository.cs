@@ -1,6 +1,5 @@
 ﻿using CryptoAppProject.Repository.RepositoryInterfaces;
 using Microsoft.EntityFrameworkCore;
-using System.Configuration;
 using System.Linq.Expressions;
 
 namespace CryptoAppProject.Repository.RepositoryClasses

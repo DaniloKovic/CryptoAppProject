@@ -2,21 +2,10 @@
 using CryptoAppProject.Model;
 using CryptoAppProject.Repository.RepositoryInterfaces;
 using Microsoft.AspNetCore.Mvc;
-using CryptoAppProject.Helper;
-using System.Net;
-using Newtonsoft.Json;
-using Org.BouncyCastle.Asn1.X509;
-using Org.BouncyCastle.Crypto;
-using Org.BouncyCastle.Security;
-using Org.BouncyCastle.X509;
-using Org.BouncyCastle.Math;
-using System.Security.Cryptography.X509Certificates;
-using System.Security.Cryptography;
-using System.IO;
 using CryptoAppProject.Model.Response;
-using System.Configuration;
-using Microsoft.Extensions.Configuration;
-using Org.BouncyCastle.Asn1.X9;
+using CryptoAppProject.Services;
+using Microsoft.Extensions.Options;
+using CryptoAppProject.Helper;
 
 namespace CryptoAppProject.Controllers
 {
@@ -24,17 +13,23 @@ namespace CryptoAppProject.Controllers
     [ApiController]
     public class UserController : ControllerBase
     {
-        private readonly IHttpContextAccessor _httpContextAccessor;
-        private readonly ILogger<UserController> _logger;
         private IUserRepository _userRepository;
+        private ILogActivityRepository _logActivityRepository;
+        private readonly JwtSettings _jwtSettings;
         private IConfiguration _configuration;
+        private readonly ICryptoService _cryptoService;
 
-        public UserController(ILogger<UserController> logger, IUserRepository userRepository, IHttpContextAccessor httpContextAccessor, IConfiguration iConfig)
+        public UserController(IUserRepository userRepository, 
+                              ILogActivityRepository logActivityRepository,                              
+                              IConfiguration iConfig,
+                              ICryptoService cryptoService,
+                              IOptions<JwtSettings> jwtSettings)
         {
-            _logger = logger;
+            _logActivityRepository = logActivityRepository;
             _userRepository = userRepository;
-            _httpContextAccessor = httpContextAccessor;
             _configuration = iConfig;
+            _cryptoService = cryptoService;
+            _jwtSettings = jwtSettings.Value;
         }
 
         [HttpGet(Name = "User")]
@@ -54,106 +49,134 @@ namespace CryptoAppProject.Controllers
             {
                 return BadRequest("Please choose another username!");
             }
-            Tuple<string, byte[]> passwordInfo = await CryptoExtensionsClass.HashPasswordFunction(userRequest.Password);
+            PasswordInformations passwordInfo = await _cryptoService.HashPasswordFunc(userRequest.Password);
 
-            // Check if CA_Entity is existing
-            var isCAexist = _configuration.GetSection("MySettings").GetSection("IsExistingCA_Entity").Value;
-            var isEstablishedCA = _configuration.GetValue<bool>("MySettings:IsExistingCA_Entity");
-            if (!isEstablishedCA)
-            {
-                // Create CA_Entity.
-                // Create Digital certificate for CA_Entity and public/private key for CA_Entity using RSA.
-                // For each of keys, create separate files inside CA folder
-                const string folderPath = "CA";
-                const string caPublicKey = "CA_PublicKey";
-                const string caPrivateKey = "CA_PrivateKey";
-                const string caDigitalCertificatePath = "CA_DigitalCertificate";
-                CryptoExtensionsClass.CreateDigitalCertificateAndKeys("CA", caPublicKey, caPrivateKey, caDigitalCertificatePath, false);
-            }
+            // Kreiraj par ključeva za korisnika koji želi da se registruje
+            var userRsaKeys = await _cryptoService.GenerateRsaKeyPair();
 
-            // Kreiraj digitalni sertifikat i par ključeva za korisnika koji želi da se registruje
+            // Load CA certificate and keys
+            var caCertificate = _cryptoService.GetCaCertificate();
+            var caKeys = _cryptoService.GetCaKeys();
+
+            // Kreiraj sertifikat za korisnika koji želi da se registruje
+            var userCertificate = _cryptoService.GenerateUserCertificate(userRsaKeys, caCertificate, caKeys, userRequest);
+
+            // Save user keys and certificate
             string userFolderPath = $"UserInformations/{userRequest.Username}";
-            string userPublicKey = $"UserInformations/{userRequest.Username}/{userRequest.Username}.key";
-            string userPrivateKey = $"UserInformations/{userRequest.Username}/{userRequest.Username}.key";
-            string userDigitalCertificatePath = $"UserInformations/{userRequest.Username}/{userRequest.Username}.cer";
-   
-            // Kreiraj digitalni sertifikat i par ključeva za korisnika koji želi da se registruje
-            CryptoExtensionsClass.CreateDigitalCertificateAndKeysForUser(userRequest, userPublicKey, userPrivateKey, userDigitalCertificatePath);
+            string userPrivateKeyPath = $"{userFolderPath}/{userRequest.Username}-private-key.pem";
+            string userPublicKeyPath = $"{userFolderPath}/{userRequest.Username}-public-key.pem";
+            string userDigitalCertificatePath = $"{userFolderPath}/{userRequest.Username}-certificate.pem";
+            await _cryptoService.SaveUserKeysAndCertificate(userRsaKeys, 
+                                                            userCertificate,
+                                                            userPrivateKeyPath, 
+                                                            userPublicKeyPath, 
+                                                            userDigitalCertificatePath);
 
-            // Insert u bazu
-            User newUser = new User()
+            int result = await _userRepository.InsertNewItemAsync(new User()
             {
                 Username = userRequest.Username,
-                PasswordHash = passwordInfo.Item1,
-                Salt = passwordInfo.Item2,
+                PasswordHash = passwordInfo.HashedPassword,
+                Salt = passwordInfo.Salt,
                 Email = userRequest.Email,
                 DateOfRegistration = DateTime.Now,
-                DigitalCertificatePath = $"UserInformations/{userRequest.Username}/{userRequest.Username}.cer",
-                // PublicKey = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo())
-                // PublicKey = "ana"
-            };
-
-            // rsaKey.privateKey
-            int result = await _userRepository.InsertNewItemAsync(newUser);
-            if(result == 1)
+                DigitalCertificatePath = userDigitalCertificatePath,
+                PublicKey = userPublicKeyPath
+            });
+            if (result == 1)
             {
-                UserRegistrationResponse response = new UserRegistrationResponse()
+                User? createdUser = await _userRepository.GetByUsername(userRequest.Username);
+                await _logActivityRepository.InsertNewItemAsync(new LogActivity()
                 {
-                    // PublicKeyBytes = rsaKey.ExportSubjectPublicKeyInfo(),
-                    // PublicKeyBase64 = Convert.ToBase64String(rsaKey.ExportSubjectPublicKeyInfo()),
-                    // PrivateKeyBytes = rsaKey.ExportRSAPrivateKey(),
-                    // PrivateKeyBase64 = Convert.ToBase64String(rsaKey.ExportRSAPrivateKey()),
-                    // DigitalCertificateFilePath = $"UserInformations/{newUser.Username}.cer",
+                    UserId = createdUser.Id,
+                    Description = $"User registered successfully! {createdUser.Username}, {createdUser.Email}, {createdUser.DateOfRegistration}",
+                });
+                var response = new UserRegistrationResponse()
+                {
+                    DigitalCertificateFilePath = userDigitalCertificatePath,
+                    PrivateKeyFilePath = userPrivateKeyPath,
+                    PublicKeyFilePath = userPublicKeyPath
                 };
                 return Ok(response);
             }
-            else
-            {
-                return BadRequest();
-            }
-
-            
+            return BadRequest();
         }
 
         /* Username: kova  Password: kova123 */
         [HttpPost]
         [Route("Login")]
-        public async Task<ActionResult<HttpStatusCode>> LogInUserAction([FromBody] UserBaseRequest userRequest)
+        public async Task<ActionResult<LoginResponse>> LogInUserAction([FromBody] LoginRequest loginRequest)
         {
-            var user = await _userRepository.GetByUsername(userRequest.Username);
+            // Validacija digitalnog sertifikata
+            if (loginRequest.Certificate == null)
+            {
+                return BadRequest("Invalid login request. Please provide all required fields.");
+            }
+
+            var user = await _userRepository.GetByUsername(loginRequest.Username);
             if (user == null)
             {
                 return BadRequest("Invalid credentials! Please, try again!");
             }
-            bool result = await _userRepository.LogInUserCheck(userRequest.Username, userRequest.Password);
+            bool result = await _userRepository.LogInUserCheck(loginRequest.Username, loginRequest.Password);
             if (result == true) 
             {
-                UserSessionData loggedUserData = new UserSessionData
-                {
-                    Username = userRequest.Username,
-                    Password = userRequest.Password,    
-                };
-                _httpContextAccessor.HttpContext?.Session.SetString("UserData", JsonConvert.SerializeObject(loggedUserData));
-                return Ok(result);
+                var accessToken = CryptoCustomExtensions.GenerateAccessToken(user, _jwtSettings);
+                var refreshToken = CryptoCustomExtensions.GenerateRefreshToken();
+
+                // Save the refresh token in the user's record in the database here
+                SetTokenCookie(refreshToken);
+                return Ok(new LoginResponse
+                { 
+                    Username = loginRequest.Username,
+                    // Password = password,
+                    AccessToken = accessToken,
+                    RefreshToken = refreshToken 
+                });
             }
             return BadRequest(result);
-            
         }
 
-        //[HttpPut]
-        //public async Task<ActionResult<User>> UpdateUser([FromBody] UserRegistrationRequest userRequest)
+        private void SetTokenCookie(string refreshToken)
+        {
+            var cookieOptions = new CookieOptions
+            {
+                HttpOnly = true,
+                Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiration)
+            };
+            Response.Cookies.Append("refreshToken", refreshToken, cookieOptions);
+        }
+
+        //private string GenerateAccessToken(User user)
         //{
-        //    var userToUpdate = await _userRepository.GetByUsername(userRequest.Username);
-        //    if (userToUpdate == null)
+        //    var key = Encoding.ASCII.GetBytes(_jwtSettings.SecretKey);
+        //    var tokenDescriptor = new SecurityTokenDescriptor
         //    {
-        //        return BadRequest();
-        //    }
-
-        //    userToUpdate.Username = userRequest.Username;
-        //    userToUpdate.PasswordHash = userRequest.Password;
-
-        //    var result = await _userRepository.UpdateItemAsync(userToUpdate);
-        //    return Ok(result);
+        //        Subject = new ClaimsIdentity(new[]
+        //        {
+        //            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+        //            new Claim(ClaimTypes.Name, user.Username),
+        //            new Claim(ClaimTypes.Email, user.Email)
+        //        }),
+        //        Expires = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpiration),
+        //        Issuer = _jwtSettings.Issuer,
+        //        Audience = _jwtSettings.Audience,
+        //        SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+        //    };
+        //    var tokenHandler = new JwtSecurityTokenHandler();
+        //    var token = tokenHandler.CreateToken(tokenDescriptor);
+        //    return tokenHandler.WriteToken(token);
         //}
+
+        //private string GenerateRefreshToken()
+        //{
+        //    var randomNumber = new byte[32];
+        //    using (var rng = RandomNumberGenerator.Create())
+        //    {
+        //        rng.GetBytes(randomNumber);
+        //        return Convert.ToBase64String(randomNumber);
+        //    }
+        //}
+
+
     }
 }
