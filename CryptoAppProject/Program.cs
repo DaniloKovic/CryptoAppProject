@@ -1,23 +1,15 @@
-using CryptoAppProject.Exception;
-using CryptoAppProject.Model;
+using CryptoAppProject.ExtensionHelper;
 using CryptoAppProject.Repository;
-using CryptoAppProject.Repository.RepositoryClasses;
-using CryptoAppProject.Repository.RepositoryInterfaces;
-using CryptoAppProject.Services;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using CryptoAppProject.Middleware;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using System.Text;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+IConfiguration configuration = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build();
 
 // Add services to the container.
 
-builder.Services.AddControllers(options => 
-{
-    options.Filters.Add<CustomExceptionFilter>();
-});
+// Global Exception handling
 
 string? connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<CryptoAppDbContext>(options =>
@@ -35,70 +27,59 @@ builder.Services.AddSwaggerGen(swagger =>
         Version = "v1",
         Title = "JWT Token Authentication API",
         Description = ".NET 8 Web API"
-    });
-    // To Enable authorization using Swagger (JWT)
-    swagger.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme()
+    }); // To Enable authorization using Swagger (JWT)
+    swagger.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme() 
     {
         Name = "Authorization",
         Type = SecuritySchemeType.ApiKey,
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\nExample: \"Bearer 12345abcdef\"",
+        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\n" +
+                      "Example: \"Bearer 12345abcdef\"",
     });
-    swagger.AddSecurityRequirement(new OpenApiSecurityRequirement {
+    swagger.AddSecurityRequirement(new OpenApiSecurityRequirement()
+    {
+        {
+            new OpenApiSecurityScheme
             {
-                new OpenApiSecurityScheme
+                Reference = new OpenApiReference
                 {
-                    Reference = new OpenApiReference
-                    {
-                        Type = ReferenceType.SecurityScheme,
-                        Id = "Bearer"
-                    }
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
                 },
-                new string[] {}
-            }
-        });
+                Scheme = "oauth2",
+                Name = "Bearer",
+                In = ParameterLocation.Header,
+            },
+            new List<string>()
+        }
+    });
 });
-builder.Services.AddHttpContextAccessor();
-builder.Services.AddDistributedMemoryCache();
 
-builder.Services.AddScoped<IUserRepository, UserRepository>();
-builder.Services.AddScoped<ILogActivityRepository, LogActivityRepository>();
-builder.Services.AddSingleton<ICryptoService, CryptoService>();
+builder.Services.ConfigureServicesExtension();
 
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-builder.Services.Configure<JwtSettings>(jwtSettings);
+builder.Services.ConfigureMiddleware();
 
-var key = Encoding.ASCII.GetBytes(jwtSettings["SecretKey"]);
+builder.Services.ConfigureAuthenticationExtension(configuration);
 
-builder.Services
-       .AddAuthentication(options =>
-        {
-            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-        })
-        .AddJwtBearer(options =>
-        {
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuer = jwtSettings["Issuer"],
-                ValidAudience = jwtSettings["Audience"],
-                IssuerSigningKey = new SymmetricSecurityKey(key)
-            };
-        });
+builder.Services.AddAuthorization();
 
+// builder.Services.AddControllers(options => { options.Filters.Add<CustomExceptionFilter>(); });
+builder.Services.AddControllers();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("CorsPolicy",
-        builder => builder.AllowAnyOrigin()
-                          .AllowAnyMethod()
-                          .AllowAnyHeader());
+    options.AddPolicy("MyCorsPolicy",
+        builder =>
+        {
+            builder.WithOrigins("http://localhost:4200") // Dodajte URL vašeg Angular frontend-a
+                    .AllowAnyHeader()
+                    .AllowAnyOrigin()
+                    // .AllowCredentials()
+                    .AllowAnyMethod()
+                    .WithMethods("GET", "POST", "PUT", "DELETE");
+        });
 });
 
 var app = builder.Build();
@@ -111,9 +92,21 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+app.UseCors("MyCorsPolicy");
+
+app.UseRouting();
+
 app.UseAuthentication();
+
 app.UseAuthorization();
+app.UseEndpoints(endpoints =>
+{
+    endpoints.MapControllers();
+});
+
 app.MapControllers();
-app.UseCors("CorsPolicy");
 
 app.Run();

@@ -1,4 +1,4 @@
-﻿using CryptoAppProject.Helper;
+﻿using CryptoAppProject.ExtensionHelper;
 using CryptoAppProject.Model;
 using CryptoAppProject.Repository.RepositoryInterfaces;
 using Microsoft.EntityFrameworkCore;

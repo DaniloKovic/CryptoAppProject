@@ -5,6 +5,6 @@ namespace CryptoAppProject.Model.Requests
     public class LoginRequest : UserBaseRequest
     {
         [Required]
-        public IFormFile Certificate { get; set; }
+        public string CertificatePath { get; set; }
     }
 }

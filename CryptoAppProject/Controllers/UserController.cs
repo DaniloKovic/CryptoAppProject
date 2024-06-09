@@ -3,9 +3,9 @@ using CryptoAppProject.Model;
 using CryptoAppProject.Repository.RepositoryInterfaces;
 using Microsoft.AspNetCore.Mvc;
 using CryptoAppProject.Model.Response;
-using CryptoAppProject.Services;
 using Microsoft.Extensions.Options;
-using CryptoAppProject.Helper;
+using CryptoAppProject.ExtensionHelper;
+using CryptoAppProject.Services.Interface;
 
 namespace CryptoAppProject.Controllers
 {
@@ -61,6 +61,7 @@ namespace CryptoAppProject.Controllers
             // Kreiraj sertifikat za korisnika koji želi da se registruje
             var userCertificate = _cryptoService.GenerateUserCertificate(userRsaKeys, caCertificate, caKeys, userRequest);
 
+
             // Save user keys and certificate
             string userFolderPath = $"UserInformations/{userRequest.Username}";
             string userPrivateKeyPath = $"{userFolderPath}/{userRequest.Username}-private-key.pem";
@@ -71,6 +72,8 @@ namespace CryptoAppProject.Controllers
                                                             userPrivateKeyPath, 
                                                             userPublicKeyPath, 
                                                             userDigitalCertificatePath);
+            string userAesKeyPath = $"{userFolderPath}/{userRequest.Username}-aes.key";
+            await _cryptoService.GenerateAndSaveAESKey(userAesKeyPath);
 
             int result = await _userRepository.InsertNewItemAsync(new User()
             {
@@ -101,82 +104,81 @@ namespace CryptoAppProject.Controllers
             return BadRequest();
         }
 
-        /* Username: kova  Password: kova123 */
-        [HttpPost]
+
         [Route("Login")]
-        public async Task<ActionResult<LoginResponse>> LogInUserAction([FromBody] LoginRequest loginRequest)
+        [ProducesResponseType(200)]
+        [ProducesResponseType(400)]
+        [Produces("application/json")]
+        [HttpPost]
+        public async Task<ActionResult<LoginResponse>> LoginUserAction([FromBody] LoginRequest loginRequest)
         {
             // Validacija digitalnog sertifikata
-            if (loginRequest.Certificate == null)
+            if (string.IsNullOrEmpty(loginRequest.CertificatePath))
             {
                 return BadRequest("Invalid login request. Please provide all required fields.");
             }
 
+            // Učitavanje sertifikata korisnika
+            Org.BouncyCastle.X509.X509Certificate userCertificate;
+            try
+            {
+                userCertificate = _cryptoService.ReadCertificate(loginRequest.CertificatePath);
+            }
+            catch(Exception ex)
+            {
+                return BadRequest($"Failed to load certificate: {ex.Message}");
+            }
+
+            // Load CA certificate and keys
+            var caCertificate = _cryptoService.GetCaCertificate();
+
+            // Validacija sertifikata
+            if (!_cryptoService.ValidateCertificate(userCertificate, loginRequest.Username, caCertificate))
+            {
+                return BadRequest("Invalid certificate. Certificate is not issued by our CA.");
+            }
+
+            // Čitanje korisničkog sertifikata na osnovu loginRequest.CertificatePath
             var user = await _userRepository.GetByUsername(loginRequest.Username);
             if (user == null)
             {
                 return BadRequest("Invalid credentials! Please, try again!");
             }
-            bool result = await _userRepository.LogInUserCheck(loginRequest.Username, loginRequest.Password);
-            if (result == true) 
+            
+            if (await _userRepository.LogInUserCheck(loginRequest.Username, loginRequest.Password)) 
             {
-                var accessToken = CryptoCustomExtensions.GenerateAccessToken(user, _jwtSettings);
-                var refreshToken = CryptoCustomExtensions.GenerateRefreshToken();
+                var accessToken = CryptoCustomExtensions.GenerateAccessToken(user, _configuration);
+                // var refreshToken = CryptoCustomExtensions.GenerateRefreshToken(_jwtSettings);
 
                 // Save the refresh token in the user's record in the database here
-                SetTokenCookie(refreshToken);
+                // SetTokenCookie(refreshToken);
                 return Ok(new LoginResponse
                 { 
                     Username = loginRequest.Username,
-                    // Password = password,
                     AccessToken = accessToken,
-                    RefreshToken = refreshToken 
+                    // RefreshToken = refreshToken,
+                    Success = true,
+                    Message = string.Empty
                 });
             }
-            return BadRequest(result);
-        }
-
-        private void SetTokenCookie(string refreshToken)
-        {
-            var cookieOptions = new CookieOptions
+            return BadRequest(new LoginResponse
             {
-                HttpOnly = true,
-                Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiration)
-            };
-            Response.Cookies.Append("refreshToken", refreshToken, cookieOptions);
+                Username = loginRequest.Username,
+                AccessToken = string.Empty,
+                // RefreshToken = string.Empty,
+                Success = false,
+                Message = "Login attempt failed! Try again!"
+            });
         }
 
-        //private string GenerateAccessToken(User user)
+        //private void SetTokenCookie(string refreshToken)
         //{
-        //    var key = Encoding.ASCII.GetBytes(_jwtSettings.SecretKey);
-        //    var tokenDescriptor = new SecurityTokenDescriptor
+        //    var cookieOptions = new CookieOptions
         //    {
-        //        Subject = new ClaimsIdentity(new[]
-        //        {
-        //            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-        //            new Claim(ClaimTypes.Name, user.Username),
-        //            new Claim(ClaimTypes.Email, user.Email)
-        //        }),
-        //        Expires = DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpiration),
-        //        Issuer = _jwtSettings.Issuer,
-        //        Audience = _jwtSettings.Audience,
-        //        SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+        //        HttpOnly = true,
+        //        Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiration)
         //    };
-        //    var tokenHandler = new JwtSecurityTokenHandler();
-        //    var token = tokenHandler.CreateToken(tokenDescriptor);
-        //    return tokenHandler.WriteToken(token);
+        //    Response.Cookies.Append("refreshToken", refreshToken, cookieOptions);
         //}
-
-        //private string GenerateRefreshToken()
-        //{
-        //    var randomNumber = new byte[32];
-        //    using (var rng = RandomNumberGenerator.Create())
-        //    {
-        //        rng.GetBytes(randomNumber);
-        //        return Convert.ToBase64String(randomNumber);
-        //    }
-        //}
-
-
     }
 }

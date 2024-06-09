@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc;
 
-namespace CryptoAppProject.Exception
+namespace CryptoAppProject.Exceptions
 {
     public class CustomExceptionFilter : IExceptionFilter
     {
