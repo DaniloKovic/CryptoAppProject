@@ -88,8 +88,9 @@ namespace CryptoAppProject.Controllers
                 string folderPath = Path.GetDirectoryName(user?.DigitalCertificatePath).Replace("\\", "/");
                 string filePath = $"{folderPath}/encrypted.txt";
                 string fileHashPath = $"{folderPath}/encryptedHashed.txt";
+                string aesKeyPath = $"{folderPath}/{user.Username}-aes.key";
 
-                string fileContent = await _cryptoService.ReadAlgorithmSimulationFile(filePath, fileHashPath);
+                string fileContent = await _cryptoService.ReadAlgorithmSimulationFile(filePath, fileHashPath, aesKeyPath);
                 return Ok(fileContent);
             }
             catch (Exception ex)

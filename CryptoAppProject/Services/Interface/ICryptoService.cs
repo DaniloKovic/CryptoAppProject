@@ -26,6 +26,6 @@ namespace CryptoAppProject.Services.Interface
         Task<string> Decrypt(string text, CryptoAlgorithmEnum algorithm, string key);
         Task GenerateAndSaveAESKey(string filePath);
         // byte[] LoadAESKey(string directoryPath);
-        Task<string> ReadAlgorithmSimulationFile(string filePath, string fileHashPath);
+        Task<string> ReadAlgorithmSimulationFile(string filePath, string fileHashPath, string aesKeyPath);
     }
 }

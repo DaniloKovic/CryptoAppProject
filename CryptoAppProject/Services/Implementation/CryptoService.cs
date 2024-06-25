@@ -290,10 +290,17 @@ namespace CryptoAppProject.Services.Implementation
 
         public async Task<string> Encrypt(string directoryPath, string plainText, CryptoAlgorithmEnum algorithm, string key, string username)
         {
-            IBaseAlgorithm cryptoAlgorithm = GetCryptoAlgorithm(algorithm);
-
-            string encryptedText = cryptoAlgorithm.Encrypt(plainText, key);
-            SaveFiles(directoryPath, plainText, algorithm, key, encryptedText, username);
+            string encryptedText = string.Empty;
+            try
+            {
+                IBaseAlgorithm cryptoAlgorithm = GetCryptoAlgorithm(algorithm);
+                encryptedText = cryptoAlgorithm.Encrypt(plainText, key);
+                SaveFiles(directoryPath, plainText, algorithm, key, encryptedText, username);
+            }
+            catch(Exception ex) 
+            {
+                return ex.Message;
+            }
             return encryptedText;
         }
 
@@ -310,23 +317,39 @@ namespace CryptoAppProject.Services.Implementation
 
         private void SaveFiles(string directoryPath, string plainText, CryptoAlgorithmEnum algorithm, string key, string encryptedText, string username)
         {
-            string filePath = $"{directoryPath}/encrypted.txt";
-            string filePathHashed = $"{directoryPath}/encryptedHashed.txt";
-
-            // Load AES key
-            // byte[] aesKey = LoadAESKey($"{directoryPath}/{username}-aes.key");
-
-            string content = $"{plainText} | {algorithm.ToString()} | {key} | {encryptedText}{Environment.NewLine}";
             try
             {
-                File.AppendAllText(filePath, content);
-                byte[] newFileContent = File.ReadAllBytes(filePath);
+                string filePath = $"{directoryPath}/encrypted.txt";
+                string filePathHashed = $"{directoryPath}/encryptedHashed.txt";
 
+                // Load AES key
+                byte[] aesKey = LoadAESKey($"{directoryPath}/{username}-aes.key");
+
+                // tekstual content to add 
+                string newEntry = $"{plainText} | {algorithm.ToString()} | {key} | {encryptedText}{Environment.NewLine}";
+
+                // Step 1: Read and decrypt existing content
+                string existingContent = "";
+                if (File.Exists(filePath))
+                {
+                    byte[] encryptedContent = File.ReadAllBytes(filePath);
+                    existingContent = DecryptWithAes(encryptedContent, aesKey);
+                }
+
+                // Step 2: Add new entry to the existing content
+                string updatedContent = existingContent + newEntry;
+
+                // Step 3: Encrypt updated content
+                byte[] encryptedUpdatedContent = EncryptWithAes(updatedContent, aesKey);
+
+                // Step 4: Write encrypted updated content back to the file
+                File.WriteAllBytes(filePath, encryptedUpdatedContent);
+
+                byte[] newFileContent = File.ReadAllBytes(filePath);
                 using (var sha256 = SHA256.Create())
                 {
                     byte[] hashBytes = sha256.ComputeHash(newFileContent);
-                    string hashString = Convert.ToBase64String(hashBytes);
-                    File.WriteAllText(filePathHashed, hashString);
+                    File.WriteAllBytes(filePathHashed, hashBytes);
                 }
             }
             catch (Exception e)
@@ -409,10 +432,10 @@ namespace CryptoAppProject.Services.Implementation
             {
                 using (Aes aes = Aes.Create())
                 {
+                    aes.KeySize = 256; // Set the key size to 256 bits
                     aes.GenerateKey();
                     byte[] aesKeyBytes = aes.Key;
-                    string base64AesKey = Convert.ToBase64String(aesKeyBytes);
-                    File.WriteAllText(userAesKeyPath, base64AesKey);
+                    File.WriteAllBytes(userAesKeyPath, aesKeyBytes);
                 }
                 return Task.CompletedTask;
             }
@@ -426,8 +449,8 @@ namespace CryptoAppProject.Services.Implementation
         {
             try
             {
-                string base64Key = File.ReadAllText(userAesKeyPath);
-                return Convert.FromBase64String(base64Key);
+                byte[] aesKeyBytes = File.ReadAllBytes(userAesKeyPath);
+                return aesKeyBytes;
             }
             catch (Exception ex)
             {
@@ -435,11 +458,11 @@ namespace CryptoAppProject.Services.Implementation
             }
         }
 
-        public async Task<string> ReadAlgorithmSimulationFile(string filePath, string fileHashPath)
+        public async Task<string> ReadAlgorithmSimulationFile(string filePath, string fileHashPath, string aesKeyPath)
         {
             try
             {
-                string fileContent = await VerifyFileIntegrityAsync(filePath, fileHashPath);
+                string fileContent = await VerifyFileIntegrityAsync(filePath, fileHashPath, aesKeyPath);
                 return fileContent;
             }
             catch (Exception ex)
@@ -448,27 +471,31 @@ namespace CryptoAppProject.Services.Implementation
             }
         }
 
-        private async Task<string> VerifyFileIntegrityAsync(string filePath, string fileHashPath)
+        private async Task<string> VerifyFileIntegrityAsync(string filePath, string fileHashPath, string aesKeyPath)
         {
             try
             {
-                string fileHashContent = File.ReadAllText(fileHashPath);
+                byte[] aesKey = LoadAESKey(aesKeyPath);
+
+                byte[] encryptedContent = File.ReadAllBytes(filePath);
+                string decryptedContent = DecryptWithAes(encryptedContent, aesKey);
+
                 using (var sha256 = SHA256.Create())
                 {
-                    byte[] fileBytes = File.ReadAllBytes(filePath);
-                    byte[] hashBytes = sha256.ComputeHash(fileBytes);
-                    string currentHash = Convert.ToBase64String(hashBytes);
+                    byte[] computedHash = sha256.ComputeHash(encryptedContent);
+                    byte[] storedHash = File.ReadAllBytes(fileHashPath);
 
-                    if(fileHashContent == currentHash)
+                    // Uporedi heš vrednosti
+                    if (computedHash.SequenceEqual(storedHash))
                     {
-                        return File.ReadAllText(filePath);
+                        return decryptedContent;
                     }
                 }
                 return "Detected change on encrypted.txt";
             }
             catch (Exception ex)
             {
-                throw new ApplicationException("An error occurred while verifying the file integrity.", ex);
+                return "An error occurred while verifying the file integrity. " + ex.Message;
             }
         }
 
@@ -497,15 +524,17 @@ namespace CryptoAppProject.Services.Implementation
 
         private string DecryptWithAes(byte[] cipherText, byte[] aesKey)
         {
-            using (Aes aes = Aes.Create())
+            using (Aes aesAlg = Aes.Create())
             {
-                aes.Key = aesKey;
                 using (var ms = new MemoryStream(cipherText))
                 {
-                    byte[] iv = new byte[aes.IV.Length];
+                    // Read the IV from the beginning of the stream
+                    byte[] iv = new byte[aesAlg.IV.Length];
                     ms.Read(iv, 0, iv.Length);
-                    aes.IV = iv;
-                    using (var decryptor = aes.CreateDecryptor(aes.Key, aes.IV))
+
+                    aesAlg.Key = aesKey;
+                    aesAlg.IV = iv;
+                    using (var decryptor = aesAlg.CreateDecryptor(aesAlg.Key, aesAlg.IV))
                     using (var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
                     using (var sr = new StreamReader(cs))
                     {
